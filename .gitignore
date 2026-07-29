@@ -1,0 +1,17 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Safety-net patterns (backend/ and frontend/ have their own scoped .gitignore
+# files too, but these catch anything at the root or missed by those).
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+.env
+.env.local
+*.log
