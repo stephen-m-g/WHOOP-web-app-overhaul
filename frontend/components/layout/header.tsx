@@ -1,30 +1,25 @@
-import Link from "next/link";
-import { ThemeToggle } from "@/components/layout/theme-toggle";
+"use client";
 
-const NAV_LINKS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/jump-trainer", label: "Jump Trainer" },
-];
+import Link from "next/link";
+import Image from "next/image";
+import { usePathname } from "next/navigation";
+import { HamburgerMenu } from "@/components/layout/hamburger-menu";
+import { NAV_ITEMS } from "@/lib/nav";
 
 export function Header() {
+  const pathname = usePathname();
+  const currentPage = NAV_ITEMS.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+
   return (
-    <header className="border-b border-border">
+    <header className="relative z-20 border-b border-border bg-background">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
-        <Link href="/" className="text-lg font-semibold tracking-tight">
-          WHOOP<span className="text-primary">+</span>
+        <Link href="/dashboard" aria-label="Go to dashboard">
+          <Image src="/whoop-logo.png" alt="WHOOP" width={140} height={36} priority className="h-6 w-auto" />
         </Link>
-        <nav className="flex items-center gap-6">
-          {NAV_LINKS.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {link.label}
-            </Link>
-          ))}
-          <ThemeToggle />
-        </nav>
+        <div className="flex items-center gap-4">
+          {currentPage && <span className="text-lg font-bold tracking-tight text-foreground">{currentPage.label}</span>}
+          <HamburgerMenu />
+        </div>
       </div>
     </header>
   );

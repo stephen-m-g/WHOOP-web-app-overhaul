@@ -7,18 +7,29 @@ centimeters using the user's known height as a calibration reference.
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from dataclasses import dataclass
 
+import cv2
 import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 
-from app.models.schemas import Keyframe, KeyframeType
+from app.models.schemas import DebugInfo, JumpType, Keyframe, KeyframeType
 
 logger = logging.getLogger(__name__)
+
+# Standard 33-point BlazePose topology edges, for drawing the skeleton overlay.
+POSE_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10),
+    (11, 12), (11, 13), (13, 15), (15, 17), (15, 19), (15, 21), (17, 19),
+    (12, 14), (14, 16), (16, 18), (16, 20), (16, 22), (18, 20),
+    (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28),
+    (27, 29), (28, 30), (29, 31), (30, 32), (27, 31), (28, 32),
+]
 
 # Path to the PoseLandmarker model bundle. Downloaded via
 # `scripts/download_model.py` (see backend/README or Dockerfile).
@@ -51,6 +62,34 @@ class JumpMetrics:
     keyframes: list[Keyframe]
     coaching_feedback: str
     analysis_confidence: float
+    debug: DebugInfo | None = None
+
+
+def draw_skeleton(frame: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
+    """Draws the 33 pose landmarks and their connecting edges on a copy of the
+    given BGR frame, for visual debugging."""
+    annotated = frame.copy()
+    h, w = annotated.shape[:2]
+
+    def to_px(idx: int) -> tuple[int, int]:
+        return int(landmarks[idx, 0] * w), int(landmarks[idx, 1] * h)
+
+    for start_idx, end_idx in POSE_CONNECTIONS:
+        cv2.line(annotated, to_px(start_idx), to_px(end_idx), (0, 255, 0), 2)
+
+    for idx in range(landmarks.shape[0]):
+        visibility = landmarks[idx, 3]
+        color = (0, 0, 255) if visibility < 0.5 else (255, 0, 0)
+        cv2.circle(annotated, to_px(idx), 4, color, -1)
+
+    return annotated
+
+
+def encode_frame_jpeg_b64(frame: np.ndarray) -> str | None:
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
 def run_pose_estimation(frames: list[np.ndarray], fps: float) -> list[FrameLandmarks]:
@@ -95,6 +134,11 @@ def _ankle_y(landmarks: np.ndarray) -> float:
     return float((landmarks[LEFT_ANKLE, 1] + landmarks[RIGHT_ANKLE, 1]) / 2.0)
 
 
+def _ankle_x(landmarks: np.ndarray) -> float:
+    """Average normalized x-position of both ankles, for broad-jump distance."""
+    return float((landmarks[LEFT_ANKLE, 0] + landmarks[RIGHT_ANKLE, 0]) / 2.0)
+
+
 def _hip_y(landmarks: np.ndarray) -> float:
     return float((landmarks[LEFT_HIP, 1] + landmarks[RIGHT_HIP, 1]) / 2.0)
 
@@ -114,8 +158,23 @@ def analyze_jump(
     fps: float,
     frame_height_px: int,
     user_height_cm: float,
+    frame_width_px: int = 0,
+    jump_type: JumpType = JumpType.VERTICAL,
+    frames: list[np.ndarray] | None = None,
+    include_debug: bool = False,
 ) -> JumpMetrics:
-    """Detect keyframes and estimate jump height/distance from tracked ankle motion."""
+    """Detect keyframes and estimate jump height/distance from tracked ankle motion.
+
+    Calibration: Uses the first ~half-second of standing frames to establish a stable
+    px_per_cm scale, then applies it to the whole clip. This is more robust than
+    using a single frame.
+
+    Keyframe detection (loading/peak/landing) is always based on vertical ankle
+    motion, since even a broad jump has a vertical arc. For broad jumps, distance
+    is then measured as the horizontal ankle displacement between the standing
+    (takeoff) position and the landing keyframe — this assumes a side-on camera
+    angle where forward motion reads as horizontal motion in frame.
+    """
     valid = [f for f in frame_landmarks if f.landmarks is not None]
     detection_rate = len(valid) / len(frame_landmarks) if frame_landmarks else 0.0
 
@@ -164,33 +223,143 @@ def analyze_jump(
         fps,
     )
 
-    # Calibration: use the standing pose's hip-to-ankle span as a proxy for the
-    # user's known height to convert normalized pixel displacement to cm.
-    standing_landmarks = valid[int(np.argmin(np.abs(frame_indices - frame_indices[0])))].landmarks
-    px_per_cm = _estimate_px_per_cm(standing_landmarks, user_height_cm)
+    # Calibration: Use the standing phase (first ~0.5s before peak) to establish a
+    # stable baseline scale. This is more robust than using a single frame.
+    standing_frame_count = max(5, int(fps * 0.5))  # ~0.5 seconds or 5 frames min
+    standing_landmarks_list = valid[:min(standing_frame_count, len(valid))]
+    calibration = _compute_calibration(standing_landmarks_list, user_height_cm, frame_height_px)
 
     vertical_displacement_norm = max(standing_y - peak_y, 0.0)
+    vertical_displacement_px = vertical_displacement_norm * frame_height_px
     jump_height_cm = None
-    if px_per_cm > 0:
-        jump_height_cm = round((vertical_displacement_norm * frame_height_px) / px_per_cm, 1)
+    if calibration.px_per_cm > 0:
+        jump_height_cm = round(vertical_displacement_px / calibration.px_per_cm, 1)
+
+    # Broad jump distance: horizontal ankle displacement between the standing
+    # (takeoff) position and the landing keyframe. x is normalized by frame
+    # WIDTH (not height, unlike the vertical calibration above) — MediaPipe
+    # normalizes x/y independently against each axis of the frame. px_per_cm
+    # is still valid here since it's already in real (isotropic) pixels/cm.
+    jump_distance_cm = None
+    horizontal_displacement_norm = None
+    horizontal_displacement_px = None
+    if jump_type == JumpType.BROAD and calibration.px_per_cm > 0 and frame_width_px > 0:
+        standing_x = float(np.mean([_ankle_x(f.landmarks) for f in standing_landmarks_list if f.landmarks is not None]))
+        landing_landmarks = valid[min(landing_idx_local, len(valid) - 1)].landmarks
+        landing_x = _ankle_x(landing_landmarks)
+        horizontal_displacement_norm = abs(landing_x - standing_x)
+        horizontal_displacement_px = horizontal_displacement_norm * frame_width_px
+        jump_distance_cm = round(horizontal_displacement_px / calibration.px_per_cm, 1)
 
     knee_bend = _knee_angle_proxy(valid[loading_idx_local].landmarks)
-    feedback = _generate_feedback(jump_height_cm, knee_bend)
+
+    # Diagnose the "peak looks like standing" failure mode: MediaPipe drops a
+    # frame entirely (no landmarks at all) when too much of the body is out of
+    # frame, most often the head at the top of a jump. If a big tracking gap
+    # sits right around our detected peak, the real peak was probably lost.
+    headroom_norm = float(valid[0].landmarks[NOSE, 1])  # distance from frame top to head while standing
+    largest_gap = _find_largest_tracking_gap(frame_landmarks)
+    peak_frame_no = int(frame_indices[peak_idx_local])
+    likely_missed_peak = (
+        largest_gap is not None
+        and largest_gap.length_frames >= 2
+        and (largest_gap.start_frame - 3) <= peak_frame_no <= (largest_gap.end_frame + 3)
+    )
+
+    feedback = _generate_feedback(jump_height_cm, knee_bend, jump_type, jump_distance_cm)
+    if likely_missed_peak:
+        feedback += (
+            " Heads up: tracking was lost for part of your jump (likely because you left the "
+            "frame at the top), so the peak — and therefore the height estimate — may be "
+            "inaccurate. Try stepping back so there's more headroom above you."
+        )
+    elif headroom_norm < 0.15:
+        feedback += (
+            " Heads up: there's not much space above your head in the starting frame. If you "
+            "jump high enough to leave the frame, the height estimate could be inaccurate — "
+            "try stepping back from the camera."
+        )
+
+    debug = None
+    if include_debug:
+        standing_frame_skeleton_b64 = None
+        peak_frame_skeleton_b64 = None
+        if frames is not None:
+            standing_frame_idx = int(frame_indices[0])
+            peak_frame_idx = int(frame_indices[peak_idx_local])
+            standing_landmarks = valid[0].landmarks
+            peak_landmarks = valid[peak_idx_local].landmarks
+            if 0 <= standing_frame_idx < len(frames) and standing_landmarks is not None:
+                annotated = draw_skeleton(frames[standing_frame_idx], standing_landmarks)
+                standing_frame_skeleton_b64 = encode_frame_jpeg_b64(annotated)
+            if 0 <= peak_frame_idx < len(frames) and peak_landmarks is not None:
+                annotated = draw_skeleton(frames[peak_frame_idx], peak_landmarks)
+                peak_frame_skeleton_b64 = encode_frame_jpeg_b64(annotated)
+
+        calc_note = (
+            f"({standing_y:.4f} - {peak_y:.4f}) x {frame_height_px}px = {vertical_displacement_px:.1f}px "
+            f"displacement / {calibration.px_per_cm:.6f} px_per_cm = "
+            f"{jump_height_cm if jump_height_cm is not None else 'N/A'} cm"
+        )
+        if jump_type == JumpType.BROAD and horizontal_displacement_px is not None:
+            calc_note += (
+                f" | horizontal: {horizontal_displacement_norm:.4f} x {frame_width_px}px = "
+                f"{horizontal_displacement_px:.1f}px / {calibration.px_per_cm:.6f} px_per_cm = "
+                f"{jump_distance_cm if jump_distance_cm is not None else 'N/A'} cm"
+            )
+        gap_frames = largest_gap.length_frames if largest_gap else 0
+        gap_ms = (gap_frames / fps * 1000) if fps > 0 else 0.0
+        debug = DebugInfo(
+            detection_rate=round(detection_rate, 3),
+            standing_frames_used=calibration.frames_used,
+            standing_hip_y_norm=round(calibration.avg_hip_y, 4),
+            standing_ankle_y_norm=round(calibration.avg_ankle_y, 4),
+            hip_to_ankle_span_norm=round(calibration.avg_span, 4),
+            estimated_px_per_cm=calibration.px_per_cm,
+            standing_y_norm=round(standing_y, 4),
+            peak_y_norm=round(peak_y, 4),
+            vertical_displacement_norm=round(vertical_displacement_norm, 4),
+            vertical_displacement_px=round(vertical_displacement_px, 1),
+            calculation_note=calc_note,
+            headroom_norm=round(headroom_norm, 4),
+            largest_tracking_gap_frames=gap_frames,
+            largest_tracking_gap_ms=round(gap_ms, 1),
+            likely_missed_peak=likely_missed_peak,
+            horizontal_displacement_norm=(
+                round(horizontal_displacement_norm, 4) if horizontal_displacement_norm is not None else None
+            ),
+            horizontal_displacement_px=(
+                round(horizontal_displacement_px, 1) if horizontal_displacement_px is not None else None
+            ),
+            standing_frame_skeleton_b64=standing_frame_skeleton_b64,
+            peak_frame_skeleton_b64=peak_frame_skeleton_b64,
+        )
 
     return JumpMetrics(
         jump_height_cm=jump_height_cm,
-        jump_distance_cm=None,  # Broad jump distance requires horizontal calibration (e.g. a reference marker); not estimated yet.
+        jump_distance_cm=jump_distance_cm,
         keyframes=keyframes,
         coaching_feedback=feedback,
         analysis_confidence=round(detection_rate, 2),
+        debug=debug,
     )
 
 
 def _moving_average(series: np.ndarray, window: int) -> np.ndarray:
+    """Box-filter smoothing with edge-replication padding.
+
+    `np.convolve(..., mode="same")` on its own implicitly zero-pads the
+    boundaries, which drags the first/last values toward zero — for y-position
+    data in [0, 1], that fabricates a fake "high point" at the very start/end
+    of every clip (exactly where a jump video's standing frames are). Padding
+    with the edge value first avoids that artifact.
+    """
     if len(series) < window:
         return series
+    pad = window // 2
+    padded = np.pad(series, (pad, window - 1 - pad), mode="edge")
     kernel = np.ones(window) / window
-    return np.convolve(series, kernel, mode="same")
+    return np.convolve(padded, kernel, mode="valid")
 
 
 def _find_landing_offset(post_peak: np.ndarray, standing_y: float) -> int:
@@ -198,6 +367,44 @@ def _find_landing_offset(post_peak: np.ndarray, standing_y: float) -> int:
         if y >= standing_y * 0.97:
             return i
     return len(post_peak) - 1
+
+
+@dataclass
+class TrackingGap:
+    start_frame: int
+    end_frame: int
+    length_frames: int
+
+
+def _find_largest_tracking_gap(frame_landmarks: list[FrameLandmarks]) -> TrackingGap | None:
+    """Finds the longest run of consecutive frames with no detected body at all.
+
+    A large gap right around the jump's peak usually means MediaPipe lost the
+    subject entirely for those frames — most commonly because part of the body
+    (often the head) left the top of the frame at the highest point of the jump.
+    Those frames are silently excluded from peak detection, which can make an
+    earlier, lower point look like the peak instead.
+    """
+    largest: TrackingGap | None = None
+    run_start: int | None = None
+
+    for i, f in enumerate(frame_landmarks):
+        if f.landmarks is None:
+            if run_start is None:
+                run_start = i
+        else:
+            if run_start is not None:
+                length = i - run_start
+                if largest is None or length > largest.length_frames:
+                    largest = TrackingGap(start_frame=run_start, end_frame=i - 1, length_frames=length)
+                run_start = None
+
+    if run_start is not None:
+        length = len(frame_landmarks) - run_start
+        if largest is None or length > largest.length_frames:
+            largest = TrackingGap(start_frame=run_start, end_frame=len(frame_landmarks) - 1, length_frames=length)
+
+    return largest
 
 
 def _build_keyframes(
@@ -214,21 +421,68 @@ def _build_keyframes(
     return sorted(keyframes, key=lambda k: k.frame)
 
 
-def _estimate_px_per_cm(landmarks: np.ndarray, user_height_cm: float) -> float:
-    """Approximate pixels-per-cm using nose-to-ankle span as a stand-in for
-    full body height (normalized coordinates, so this returns a normalized
-    "unit per cm" scale, not literal pixels)."""
-    nose_y = float(landmarks[NOSE, 1])
-    ankle_y = _ankle_y(landmarks)
-    body_span_norm = max(ankle_y - nose_y, 1e-6)
-    # body_span_norm (normalized 0-1) approximates ~95% of full standing height.
-    approx_height_norm = body_span_norm / 0.95
-    return approx_height_norm / user_height_cm if user_height_cm > 0 else 0.0
+@dataclass
+class CalibrationResult:
+    px_per_cm: float
+    avg_hip_y: float
+    avg_ankle_y: float
+    avg_span: float
+    frames_used: int
 
 
-def _generate_feedback(jump_height_cm: float | None, knee_bend: float) -> str:
+def _compute_calibration(
+    standing_landmarks_list: list[FrameLandmarks], user_height_cm: float, frame_height_px: int
+) -> CalibrationResult:
+    """Establish a stable px_per_cm scale by averaging across multiple standing frames.
+
+    Uses hip-to-ankle span (more stable than nose-to-ankle) as a proxy for body height.
+    Averages across ~0.5s of standing posture to reduce jitter.
+    """
+    hip_ys, ankle_ys, spans = [], [], []
+    for frame_lm in standing_landmarks_list:
+        if frame_lm.landmarks is None:
+            continue
+        hip_y = _hip_y(frame_lm.landmarks)
+        ankle_y = _ankle_y(frame_lm.landmarks)
+        hip_ys.append(hip_y)
+        ankle_ys.append(ankle_y)
+        spans.append(max(ankle_y - hip_y, 1e-6))
+
+    if not spans:
+        return CalibrationResult(px_per_cm=0.0, avg_hip_y=0.0, avg_ankle_y=0.0, avg_span=0.0, frames_used=0)
+
+    avg_hip_y = float(np.mean(hip_ys))
+    avg_ankle_y = float(np.mean(ankle_ys))
+    avg_span = float(np.mean(spans))
+    # avg_span (normalized 0-1, a fraction of frame height) approximates the
+    # distance from hips to ankles, which is roughly 55% of full standing
+    # height (from hips to top of head). Convert to actual pixels via
+    # frame_height_px before dividing by user_height_cm — px_per_cm must be
+    # in pixels/cm, not normalized-units/cm, or the later division against a
+    # pixel displacement produces numbers off by a factor of frame_height_px.
+    approx_height_norm = avg_span / 0.55
+    approx_height_px = approx_height_norm * frame_height_px
+    px_per_cm = approx_height_px / user_height_cm if user_height_cm > 0 else 0.0
+
+    return CalibrationResult(
+        px_per_cm=px_per_cm,
+        avg_hip_y=avg_hip_y,
+        avg_ankle_y=avg_ankle_y,
+        avg_span=avg_span,
+        frames_used=len(spans),
+    )
+
+
+def _generate_feedback(
+    jump_height_cm: float | None,
+    knee_bend: float,
+    jump_type: JumpType = JumpType.VERTICAL,
+    jump_distance_cm: float | None = None,
+) -> str:
     parts = []
-    if jump_height_cm is not None:
+    if jump_type == JumpType.BROAD and jump_distance_cm is not None:
+        parts.append(f"Estimated jump distance: {jump_distance_cm:.1f} cm.")
+    elif jump_height_cm is not None:
         parts.append(f"Estimated jump height: {jump_height_cm:.1f} cm.")
     if knee_bend < 0.3:
         parts.append("Try bending your knees more during the loading phase to generate more power.")

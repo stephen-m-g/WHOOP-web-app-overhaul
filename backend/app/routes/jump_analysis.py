@@ -8,7 +8,7 @@ import time
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.config import Settings, get_settings
-from app.models.schemas import JumpAnalysisResponse
+from app.models.schemas import JumpAnalysisResponse, JumpType
 from app.services import pose_analyzer, video_processor
 from app.services.video_processor import VideoValidationError
 
@@ -25,6 +25,11 @@ router = APIRouter()
 async def analyze_jump(
     video: UploadFile = File(..., description="MP4 or MOV video of a vertical or broad jump"),
     user_height_cm: float = Form(..., gt=0, description="User's height in centimeters, used for calibration"),
+    jump_type: JumpType = Form(
+        JumpType.VERTICAL,
+        description="'vertical' (default) or 'broad'. Broad jump distance assumes a side-on camera angle.",
+    ),
+    include_debug: bool = Form(False, description="If true, include intermediate calibration values and skeleton-overlay images"),
     settings: Settings = Depends(get_settings),
 ) -> JumpAnalysisResponse:
     start = time.perf_counter()
@@ -43,6 +48,10 @@ async def analyze_jump(
             fps=info.fps,
             frame_height_px=info.height,
             user_height_cm=user_height_cm,
+            frame_width_px=info.width,
+            jump_type=jump_type,
+            frames=frames if include_debug else None,
+            include_debug=include_debug,
         )
     except VideoValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -61,6 +70,7 @@ async def analyze_jump(
         coaching_feedback=metrics.coaching_feedback,
         analysis_confidence=metrics.analysis_confidence,
         processing_time_ms=processing_time_ms,
+        debug=metrics.debug,
     )
 
 
