@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { getLastKnownCursorPosition } from "@/lib/cursor-tracker";
 
 const SPACING = 64;
 const DISTORT_RADIUS = 340;
@@ -51,7 +52,6 @@ export function InteractiveGridBackground() {
 
     const mouse = { x: 0, y: 0 };
     const smoothMouse = { x: 0, y: 0 };
-    let hasPointer = false;
 
     function buildGrid() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -75,14 +75,21 @@ export function InteractiveGridBackground() {
     function handleMouseMove(event: MouseEvent) {
       mouse.x = event.clientX;
       mouse.y = event.clientY;
-      if (!hasPointer) {
-        smoothMouse.x = mouse.x;
-        smoothMouse.y = mouse.y;
-      }
-      hasPointer = true;
     }
 
     buildGrid();
+
+    // Seed from wherever the cursor already is — even if it's never moved on
+    // this page, it may have moved earlier on another page in this session
+    // (the tracker survives client-side navigation). If it truly hasn't
+    // moved at all yet, start from the screen center and let the existing
+    // smoothMouse easing carry the effect over once a real position arrives.
+    const lastKnown = getLastKnownCursorPosition();
+    mouse.x = lastKnown?.x ?? width / 2;
+    mouse.y = lastKnown?.y ?? height / 2;
+    smoothMouse.x = mouse.x;
+    smoothMouse.y = mouse.y;
+
     window.addEventListener("resize", buildGrid);
     window.addEventListener("mousemove", handleMouseMove);
 
@@ -97,7 +104,7 @@ export function InteractiveGridBackground() {
       const effectiveDistortRadius = DISTORT_RADIUS * powerOnT;
       const effectiveGlowRadius = GLOW_RADIUS * powerOnT;
 
-      if (!reduceMotion && hasPointer) {
+      if (!reduceMotion) {
         smoothMouse.x += (mouse.x - smoothMouse.x) * SMOOTHING;
         smoothMouse.y += (mouse.y - smoothMouse.y) * SMOOTHING;
       }
@@ -113,7 +120,7 @@ export function InteractiveGridBackground() {
         let y = p.baseY;
         let glow = 0;
 
-        if (!reduceMotion && hasPointer) {
+        if (!reduceMotion) {
           // Offset FROM the cursor TO the point (not the other way around) —
           // scaling this vector outward is what gives the bulge/magnify look,
           // as opposed to pulling points toward a single collapse point.

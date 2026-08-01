@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { recoveryZone } from "@/lib/recovery-zones";
+import { getLastKnownCursorPosition } from "@/lib/cursor-tracker";
 
 const SPACING = 24;
 const ACTIVATION_RADIUS = 350;
@@ -74,7 +75,6 @@ export function RecoveryRippleBackground({ averageScore }: RecoveryRippleBackgro
 
     const mouse = { x: 0, y: 0 };
     const smoothMouse = { x: 0, y: 0 };
-    let hasPointer = false;
 
     function buildGrid() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -98,14 +98,21 @@ export function RecoveryRippleBackground({ averageScore }: RecoveryRippleBackgro
     function handleMouseMove(event: MouseEvent) {
       mouse.x = event.clientX;
       mouse.y = event.clientY;
-      if (!hasPointer) {
-        smoothMouse.x = mouse.x;
-        smoothMouse.y = mouse.y;
-      }
-      hasPointer = true;
     }
 
     buildGrid();
+
+    // Seed from wherever the cursor already is — even if it's never moved on
+    // this page, it may have moved earlier on another page in this session
+    // (the tracker survives client-side navigation). If it truly hasn't
+    // moved at all yet, start from the screen center and let the existing
+    // smoothMouse easing carry the effect over once a real position arrives.
+    const lastKnown = getLastKnownCursorPosition();
+    mouse.x = lastKnown?.x ?? width / 2;
+    mouse.y = lastKnown?.y ?? height / 2;
+    smoothMouse.x = mouse.x;
+    smoothMouse.y = mouse.y;
+
     window.addEventListener("resize", buildGrid);
     window.addEventListener("mousemove", handleMouseMove);
 
@@ -118,7 +125,7 @@ export function RecoveryRippleBackground({ averageScore }: RecoveryRippleBackgro
       const powerOnLinear = Math.max(0, Math.min(1, (elapsed - POWER_ON_DELAY_MS) / POWER_ON_DURATION_MS));
       const powerOnT = powerOnLinear * powerOnLinear * (3 - 2 * powerOnLinear);
 
-      if (!reduceMotion && hasPointer) {
+      if (!reduceMotion) {
         smoothMouse.x += (mouse.x - smoothMouse.x) * SMOOTHING;
         smoothMouse.y += (mouse.y - smoothMouse.y) * SMOOTHING;
       }
@@ -130,7 +137,7 @@ export function RecoveryRippleBackground({ averageScore }: RecoveryRippleBackgro
         let activation = 0;
         let visibility = 0;
 
-        if (!reduceMotion && hasPointer) {
+        if (!reduceMotion) {
           const dx = p.baseX - smoothMouse.x;
           const dy = p.baseY - smoothMouse.y;
           const dist = Math.sqrt(dx * dx + dy * dy);

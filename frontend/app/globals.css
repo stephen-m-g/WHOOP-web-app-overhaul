@@ -16,6 +16,7 @@
   --color-metric-recovery-mid: var(--metric-recovery-mid);
   --color-metric-recovery-high: var(--metric-recovery-high);
   --color-metric-strain: var(--metric-strain);
+  --color-jump-trainer-accent: var(--jump-trainer-accent);
   --color-stage-awake: var(--stage-awake);
   --color-stage-light: var(--stage-light);
   --color-stage-rem: var(--stage-rem);
@@ -64,6 +65,7 @@
   /* Whoop brand palette, from Figma. */
   --whoop-accent: #0195e9;
   --whoop-secondary: #ff6b6b;
+  --jump-trainer-accent: #7d47ae;
 
   /* Metric-specific data colors — shared across light/dark since they're
      decorative gauge fills, not text (numeric values render in --foreground). */
@@ -173,6 +175,15 @@
     .animate-intro-fade {
       animation: none;
     }
+  }
+
+  /* Keeps a container scrollable without ever showing a scrollbar. */
+  .scrollbar-hidden {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
   }
 }
 

@@ -7,14 +7,13 @@ export async function POST(request: NextRequest) {
   const userHeightCm = Number(formData.get("userHeightCm"));
   const jumpTypeRaw = formData.get("jumpType");
   const jumpType: JumpType = jumpTypeRaw === "broad" ? "broad" : "vertical";
-  const includeDebug = formData.get("includeDebug") === "true";
 
   if (!(video instanceof File) || !userHeightCm || Number.isNaN(userHeightCm)) {
     return NextResponse.json({ error: "Missing video or userHeightCm" }, { status: 400 });
   }
 
   try {
-    const result = await analyzeJump(video, userHeightCm, jumpType, includeDebug);
+    const result = await analyzeJump(video, userHeightCm, jumpType);
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof BackendApiError) {

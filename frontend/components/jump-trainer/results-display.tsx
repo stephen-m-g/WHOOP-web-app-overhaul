@@ -1,77 +1,82 @@
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { DebugPanel } from "@/components/jump-trainer/debug-panel";
-import type { JumpAnalysisResult } from "@/lib/api";
+"use client";
 
-const KEYFRAME_LABELS: Record<string, string> = {
-  loading: "Loading",
-  penultimate_step: "Penultimate Step",
-  takeoff: "Takeoff",
-  peak: "Peak",
-  landing: "Landing",
-};
+import { useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { KeyFrameAnalysis } from "@/components/jump-trainer/key-frame-analysis";
+import type { JumpAnalysisResult, JumpType } from "@/lib/api";
+import { cn, GLASS_CARD } from "@/lib/utils";
 
-export function ResultsDisplay({ result }: { result: JumpAnalysisResult }) {
+interface ResultsDisplayProps {
+  jumpType: JumpType;
+  result: JumpAnalysisResult;
+}
+
+type Unit = "metric" | "imperial";
+
+const CM_PER_INCH = 2.54;
+
+function formatMeasurement(cm: number, unit: Unit): string {
+  if (unit === "metric") return `${cm} cm`;
+  return `${(cm / CM_PER_INCH).toFixed(1)} in`;
+}
+
+export function ResultsDisplay({ jumpType, result }: ResultsDisplayProps) {
+  const [unit, setUnit] = useState<Unit>("metric");
   const confidencePct = Math.round(result.analysis_confidence * 100);
+  const measurementCm = jumpType === "vertical" ? result.jump_height_cm : result.jump_distance_cm;
+  const measurementLabel = jumpType === "vertical" ? "estimated height:" : "estimated distance:";
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Jump Analysis</CardTitle>
-            <Badge variant={confidencePct >= 50 ? "default" : "destructive"}>
-              {confidencePct}% confidence
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Jump Height</p>
-              <p className="text-2xl font-bold">
-                {result.jump_height_cm !== null ? `${result.jump_height_cm} cm` : "N/A"}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Jump Distance</p>
-              <p className="text-2xl font-bold">
-                {result.jump_distance_cm !== null ? `${result.jump_distance_cm} cm` : "N/A"}
-              </p>
-            </div>
+    <div className="flex flex-col gap-4">
+      <Card className={cn("animate-intro-fade [animation-delay:150ms]", GLASS_CARD)}>
+        <CardContent>
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h1 className="text-lg font-bold tracking-tight">
+              {jumpType === "vertical" ? "Vertical Jump:" : "Broad Jump:"}
+            </h1>
+            <span className="text-sm font-semibold text-jump-trainer-accent">{confidencePct}% Confidence</span>
           </div>
 
-          <Separator />
-
-          <div>
-            <p className="mb-2 text-sm font-medium">Coaching Feedback</p>
-            <p className="text-sm text-muted-foreground">{result.coaching_feedback}</p>
-          </div>
-
-          {result.keyframes.length > 0 && (
-            <>
-              <Separator />
-              <div>
-                <p className="mb-2 text-sm font-medium">Keyframes</p>
-                <div className="flex flex-wrap gap-2">
-                  {result.keyframes.map((kf) => (
-                    <Badge key={`${kf.type}-${kf.frame}`} variant="outline">
-                      {KEYFRAME_LABELS[kf.type] ?? kf.type} — {(kf.timestamp_ms / 1000).toFixed(2)}s
-                    </Badge>
-                  ))}
-                </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-muted-foreground">{measurementLabel}</span>
+              <div className="flex items-center gap-1 rounded-full bg-muted p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setUnit("metric")}
+                  aria-pressed={unit === "metric"}
+                  className={cn(
+                    "cursor-pointer rounded-full px-2.5 py-1 transition-colors",
+                    unit === "metric" ? "bg-background font-semibold text-foreground shadow-sm" : "text-muted-foreground",
+                  )}
+                >
+                  cm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnit("imperial")}
+                  aria-pressed={unit === "imperial"}
+                  className={cn(
+                    "cursor-pointer rounded-full px-2.5 py-1 transition-colors",
+                    unit === "imperial" ? "bg-background font-semibold text-foreground shadow-sm" : "text-muted-foreground",
+                  )}
+                >
+                  in
+                </button>
               </div>
-            </>
-          )}
-
-          <p className="text-xs text-muted-foreground">
-            Processed in {result.processing_time_ms}ms
-          </p>
+            </div>
+            <span className="font-stat text-2xl font-bold tabular-nums">
+              {measurementCm != null ? formatMeasurement(measurementCm, unit) : "N/A"}
+            </span>
+          </div>
         </CardContent>
       </Card>
 
-      {result.debug && <DebugPanel debug={result.debug} />}
+      <Card className={cn("animate-intro-fade [animation-delay:300ms]", GLASS_CARD)}>
+        <CardContent>
+          <KeyFrameAnalysis />
+        </CardContent>
+      </Card>
     </div>
   );
 }
