@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 
 const SPACING = 64;
 const DISTORT_RADIUS = 340;
-const DISTORT_STRENGTH = 0.55;
+const DISTORT_STRENGTH = 0.25;
 // Wider than DISTORT_RADIUS on purpose: the visible glow reaches further out
 // than the physical bulge, and fades all the way to 0 (not a flat baseline)
 // so points far from the cursor — e.g. near the screen edges — go fully dark.
@@ -13,7 +13,13 @@ const SMOOTHING = 0.08;
 const DOT_RADIUS = 2.3;
 const LINE_MAX_ALPHA = 0.42;
 const DOT_MAX_ALPHA = 0.8;
-const LINE_RGB = "1, 149, 233";
+const LINE_RGB = "255, 255, 255";
+
+// The cursor effect doesn't snap on at full radius the instant the page is
+// interactive — it waits for the intro fade to settle, then expands out
+// from 0 to full radius over POWER_ON_DURATION_MS, like it's switching on.
+const POWER_ON_DELAY_MS = 800;
+const POWER_ON_DURATION_MS = 900;
 
 interface GridPoint {
   baseX: number;
@@ -81,8 +87,16 @@ export function InteractiveGridBackground() {
     window.addEventListener("mousemove", handleMouseMove);
 
     let raf = 0;
+    let startTime: number | null = null;
 
-    function render() {
+    function render(time: number) {
+      if (startTime === null) startTime = time;
+      const elapsed = time - startTime;
+      const powerOnLinear = Math.max(0, Math.min(1, (elapsed - POWER_ON_DELAY_MS) / POWER_ON_DURATION_MS));
+      const powerOnT = powerOnLinear * powerOnLinear * (3 - 2 * powerOnLinear);
+      const effectiveDistortRadius = DISTORT_RADIUS * powerOnT;
+      const effectiveGlowRadius = GLOW_RADIUS * powerOnT;
+
       if (!reduceMotion && hasPointer) {
         smoothMouse.x += (mouse.x - smoothMouse.x) * SMOOTHING;
         smoothMouse.y += (mouse.y - smoothMouse.y) * SMOOTHING;
@@ -107,16 +121,16 @@ export function InteractiveGridBackground() {
           const offsetY = p.baseY - smoothMouse.y;
           const dist = Math.sqrt(offsetX * offsetX + offsetY * offsetY);
 
-          if (dist < DISTORT_RADIUS) {
-            const warpLinear = 1 - dist / DISTORT_RADIUS;
+          if (dist < effectiveDistortRadius) {
+            const warpLinear = 1 - dist / effectiveDistortRadius;
             const warpT = warpLinear * warpLinear * (3 - 2 * warpLinear);
             const scale = 1 + warpT * DISTORT_STRENGTH;
             x = smoothMouse.x + offsetX * scale;
             y = smoothMouse.y + offsetY * scale;
           }
 
-          if (dist < GLOW_RADIUS) {
-            const glowLinear = 1 - dist / GLOW_RADIUS;
+          if (dist < effectiveGlowRadius) {
+            const glowLinear = 1 - dist / effectiveGlowRadius;
             glow = glowLinear * glowLinear * (3 - 2 * glowLinear);
           }
         }

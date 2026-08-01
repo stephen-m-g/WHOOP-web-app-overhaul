@@ -139,25 +139,21 @@ export default async function DashboardPage({
         </Alert>
       )}
 
-      <div className="animate-intro-fade [animation-delay:500ms]">
+      <div className="animate-intro-fade">
         <WelcomeBanner firstName={profile?.first_name ?? null} insight={insight} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        <div className="animate-intro-pop [animation-delay:1400ms]">
-          <DateSelector date={date} activities={activities} />
-        </div>
-        <div className="animate-intro-pop [animation-delay:1500ms]">
-          <AtAGlanceStats sleepPerformance={sleepPerformance} recoveryScore={recoveryScore} strain={dayStrain} />
-        </div>
+      <div className="animate-intro-fade grid grid-cols-1 gap-4 [animation-delay:150ms] md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <DateSelector date={date} activities={activities} />
+        <AtAGlanceStats sleepPerformance={sleepPerformance} recoveryScore={recoveryScore} strain={dayStrain} />
       </div>
 
-      <div className="animate-intro-pop mt-4 [animation-delay:1600ms]">
+      <div className="animate-intro-fade mt-4 [animation-delay:300ms]">
         <InsightsCarousel
           sleep={sleep}
           recovery={recovery}
           sleepPerformance={sleepPerformance}
-          dayStrain={dayStrain}
+          cycle={cycle}
           workouts={workoutRecords}
         />
       </div>

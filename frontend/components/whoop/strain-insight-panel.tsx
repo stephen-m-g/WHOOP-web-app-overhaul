@@ -1,93 +1,45 @@
-"use client";
-
-import { useState } from "react";
-import type { WorkoutRecord } from "@/lib/whoop";
-import { formatDuration } from "@/lib/date";
-import { cn } from "@/lib/utils";
+import type { CycleRecord, WorkoutRecord } from "@/lib/whoop";
+import { buildStrainStats, buildWorkoutZoneBreakdown } from "@/lib/strain-stats";
+import { WorkoutZoneBar } from "@/components/whoop/workout-zone-bar";
 
 interface StrainInsightPanelProps {
-  dayStrain: number | null;
+  cycle: CycleRecord | null;
   workouts: WorkoutRecord[];
 }
 
-interface ActivityOption {
-  key: string;
-  label: string;
-  strain: number | null;
-  maxHr: number | null;
-  avgHr: number | null;
-  calories: number | null;
-  durationMilli: number | null;
-}
+/**
+ * Mirrors the strain detail page's "day" view (stats + per-workout HR zone
+ * breakdowns) rather than a continuous heart-rate graph — Whoop's public API
+ * doesn't expose per-minute HR for workouts, only the zone_durations totals.
+ */
+export function StrainInsightPanel({ cycle, workouts }: StrainInsightPanelProps) {
+  const stats = buildStrainStats(cycle ? [cycle] : []);
+  const zoneBreakdowns = workouts.map((workout) => buildWorkoutZoneBreakdown(workout)).filter((breakdown) => breakdown !== null);
 
-const KILOJOULES_PER_KCAL = 4.184;
-
-export function StrainInsightPanel({ dayStrain, workouts }: StrainInsightPanelProps) {
-  const options: ActivityOption[] = [
-    { key: "day", label: "Day", strain: dayStrain, maxHr: null, avgHr: null, calories: null, durationMilli: null },
-    ...workouts.map((workout, index) => ({
-      key: workout.id || String(index),
-      label: workout.sport_name ?? "Activity",
-      strain: workout.score?.strain ?? null,
-      maxHr: workout.score?.max_heart_rate ?? null,
-      avgHr: workout.score?.average_heart_rate ?? null,
-      calories: workout.score?.kilojoule != null ? Math.round(workout.score.kilojoule / KILOJOULES_PER_KCAL) : null,
-      durationMilli: new Date(workout.end).getTime() - new Date(workout.start).getTime(),
-    })),
-  ];
-
-  const [selectedKey, setSelectedKey] = useState(options[0]?.key ?? "day");
-  const selected = options.find((option) => option.key === selectedKey) ?? options[0];
-
-  if (!selected) {
-    return <p className="text-sm text-muted-foreground">No activity data recorded for this day.</p>;
+  if (stats.length === 0 && zoneBreakdowns.length === 0) {
+    return <p className="text-sm text-muted-foreground">No strain data recorded for this day.</p>;
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
-        {options.map((option) => (
-          <button
-            key={option.key}
-            type="button"
-            onClick={() => setSelectedKey(option.key)}
-            className={cn(
-              "cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              option.key === selectedKey
-                ? "bg-metric-strain text-white"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {option.label}
-            {option.strain != null && <span className="ml-1.5 tabular-nums">{option.strain.toFixed(1)}</span>}
-          </button>
-        ))}
-      </div>
+      {stats.length > 0 && (
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+          {stats.map((stat) => (
+            <div key={stat.label}>
+              <dt className="text-xs text-muted-foreground">{stat.label}</dt>
+              <dd className="font-stat text-lg font-semibold tabular-nums">{stat.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
 
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
-        <div>
-          <dt className="text-xs text-muted-foreground">Max HR</dt>
-          <dd className="font-stat text-lg font-semibold tabular-nums">{selected.maxHr ?? "—"}</dd>
+      {zoneBreakdowns.length > 0 && (
+        <div className="flex flex-col gap-4">
+          {zoneBreakdowns.map((breakdown) => (
+            <WorkoutZoneBar key={breakdown.workoutId} breakdown={breakdown} />
+          ))}
         </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Average HR</dt>
-          <dd className="font-stat text-lg font-semibold tabular-nums">{selected.avgHr ?? "—"}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Calories</dt>
-          <dd className="font-stat text-lg font-semibold tabular-nums">{selected.calories ?? "—"}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Duration</dt>
-          <dd className="font-stat text-lg font-semibold tabular-nums">
-            {selected.durationMilli != null ? formatDuration(selected.durationMilli) : "—"}
-          </dd>
-        </div>
-      </dl>
-
-      <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-border bg-muted/40 text-sm text-muted-foreground">
-        Heart rate graph — coming soon
-      </div>
+      )}
     </div>
   );
 }

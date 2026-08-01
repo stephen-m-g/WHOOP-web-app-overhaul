@@ -145,8 +145,8 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
-/* Dashboard load-in choreography — see app/dashboard/page.tsx for the
-   per-element delays that stagger these. */
+/* Page load-in fade — see the individual page files for the per-element
+   delays that stagger these. */
 @keyframes intro-fade {
   from {
     opacity: 0;
@@ -156,22 +156,11 @@
   }
 }
 
-@keyframes intro-pop {
-  from {
-    opacity: 0;
-    transform: scale(1.12);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* @layer utilities (not unlayered) so these sit in the same cascade layer as
+/* @layer utilities (not unlayered) so this sits in the same cascade layer as
    Tailwind's generated utilities. Longhand animation-* properties only — no
    `animation` shorthand — so animation-delay is left entirely to the
-   [animation-delay:...] arbitrary-value utility applied alongside these
-   classes, with no property collision between the two. */
+   [animation-delay:...] arbitrary-value utility applied alongside this
+   class, with no property collision between the two. */
 @layer utilities {
   .animate-intro-fade {
     animation-name: intro-fade;
@@ -180,16 +169,8 @@
     animation-fill-mode: both;
   }
 
-  .animate-intro-pop {
-    animation-name: intro-pop;
-    animation-duration: 600ms;
-    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-    animation-fill-mode: both;
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    .animate-intro-fade,
-    .animate-intro-pop {
+    .animate-intro-fade {
       animation: none;
     }
   }

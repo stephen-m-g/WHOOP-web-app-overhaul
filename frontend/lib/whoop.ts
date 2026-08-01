@@ -24,7 +24,7 @@ export type JumpType = "vertical" | "broad";
 
 export interface RecoveryRecord {
   cycle_id: number;
-  sleep_id: number;
+  sleep_id: string;
   created_at: string;
   updated_at: string;
   score_state: "SCORED" | "PENDING_SCORE" | "UNSCORABLE";
@@ -81,6 +81,14 @@ export interface WorkoutRecord {
     max_heart_rate: number;
     kilojoule: number;
     distance_meter?: number;
+    zone_durations?: {
+      zone_zero_milli: number;
+      zone_one_milli: number;
+      zone_two_milli: number;
+      zone_three_milli: number;
+      zone_four_milli: number;
+      zone_five_milli: number;
+    };
   };
 }
 
@@ -178,30 +186,62 @@ interface DateRangeParams {
   end?: string;
 }
 
-function buildQuery(params?: DateRangeParams): string {
+interface PageParams extends DateRangeParams {
+  nextToken?: string;
+}
+
+function buildQuery(params?: PageParams): string {
   if (!params) return "";
   const search = new URLSearchParams();
   if (params.limit) search.set("limit", String(params.limit));
   if (params.start) search.set("start", params.start);
   if (params.end) search.set("end", params.end);
+  if (params.nextToken) search.set("nextToken", params.nextToken);
   const query = search.toString();
   return query ? `?${query}` : "";
 }
 
+/** Whoop caps `limit` at 25 per request; larger requests page through via next_token/nextToken. */
+const MAX_PAGE_SIZE = 25;
+
+interface PagedResult<T> {
+  records: T[];
+  next_token?: string | null;
+}
+
+async function fetchPaginated<T>(path: string, accessToken: string, params?: DateRangeParams): Promise<{ records: T[] }> {
+  const desiredTotal = params?.limit ?? MAX_PAGE_SIZE;
+  const records: T[] = [];
+  let nextToken: string | undefined;
+
+  while (records.length < desiredTotal) {
+    const pageSize = Math.min(MAX_PAGE_SIZE, desiredTotal - records.length);
+    const page = await whoopFetch<PagedResult<T>>(
+      `${path}${buildQuery({ ...params, limit: pageSize, nextToken })}`,
+      accessToken,
+    );
+    records.push(...page.records);
+    if (!page.next_token) break;
+    nextToken = page.next_token;
+  }
+
+  return { records };
+}
+
 export function getRecovery(accessToken: string, params?: DateRangeParams) {
-  return whoopFetch<{ records: RecoveryRecord[] }>(`/recovery${buildQuery(params)}`, accessToken);
+  return fetchPaginated<RecoveryRecord>("/recovery", accessToken, params);
 }
 
 export function getSleep(accessToken: string, params?: DateRangeParams) {
-  return whoopFetch<{ records: SleepRecord[] }>(`/activity/sleep${buildQuery(params)}`, accessToken);
+  return fetchPaginated<SleepRecord>("/activity/sleep", accessToken, params);
 }
 
 export function getWorkouts(accessToken: string, params?: DateRangeParams) {
-  return whoopFetch<{ records: WorkoutRecord[] }>(`/activity/workout${buildQuery(params)}`, accessToken);
+  return fetchPaginated<WorkoutRecord>("/activity/workout", accessToken, params);
 }
 
 export function getCycles(accessToken: string, params?: DateRangeParams) {
-  return whoopFetch<{ records: CycleRecord[] }>(`/cycle${buildQuery(params)}`, accessToken);
+  return fetchPaginated<CycleRecord>("/cycle", accessToken, params);
 }
 
 export function getProfile(accessToken: string) {

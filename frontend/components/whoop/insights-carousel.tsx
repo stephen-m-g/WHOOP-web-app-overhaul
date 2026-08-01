@@ -8,7 +8,7 @@ import { cn, GLASS_CARD } from "@/lib/utils";
 import { SleepInsightPanel } from "@/components/whoop/sleep-insight-panel";
 import { RecoveryInsightPanel } from "@/components/whoop/recovery-insight-panel";
 import { StrainInsightPanel } from "@/components/whoop/strain-insight-panel";
-import type { SleepRecord, RecoveryRecord, WorkoutRecord } from "@/lib/whoop";
+import type { SleepRecord, RecoveryRecord, CycleRecord, WorkoutRecord } from "@/lib/whoop";
 
 type InsightTab = "sleep" | "recovery" | "strain";
 
@@ -16,7 +16,7 @@ interface InsightsCarouselProps {
   sleep: SleepRecord | null;
   recovery: RecoveryRecord | null;
   sleepPerformance: number | null;
-  dayStrain: number | null;
+  cycle: CycleRecord | null;
   workouts: WorkoutRecord[];
 }
 
@@ -32,7 +32,7 @@ const TABS: Array<{ key: InsightTab; label: string; icon: typeof Moon; color: st
   { key: "strain", label: "Strain Insights", icon: User, color: "var(--metric-strain)", href: "/strain" },
 ];
 
-export function InsightsCarousel({ sleep, recovery, sleepPerformance, dayStrain, workouts }: InsightsCarouselProps) {
+export function InsightsCarousel({ sleep, recovery, sleepPerformance, cycle, workouts }: InsightsCarouselProps) {
   const [active, setActive] = useState<InsightTab>("sleep");
   const activeTab = TABS.find((tab) => tab.key === active) ?? TABS[0];
 
@@ -68,7 +68,7 @@ export function InsightsCarousel({ sleep, recovery, sleepPerformance, dayStrain,
       <div key={active} className="animate-in fade-in-0 px-(--card-spacing) pb-(--card-spacing) duration-300">
         {active === "sleep" && <SleepInsightPanel sleep={sleep} />}
         {active === "recovery" && <RecoveryInsightPanel recovery={recovery} sleepPerformance={sleepPerformance} />}
-        {active === "strain" && <StrainInsightPanel dayStrain={dayStrain} workouts={workouts} />}
+        {active === "strain" && <StrainInsightPanel cycle={cycle} workouts={workouts} />}
 
         <div className="mt-4 flex justify-end">
           <Link

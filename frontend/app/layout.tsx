@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import { ThemeProvider } from "@/components/layout/theme-provider";
 import { Header } from "@/components/layout/header";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 const inter = Inter({
@@ -33,8 +34,10 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
-          <Header />
-          <main className="flex-1">{children}</main>
+          <TooltipProvider delay={150}>
+            <Header />
+            <main className="flex-1">{children}</main>
+          </TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

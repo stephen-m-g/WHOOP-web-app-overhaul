@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { recoveryZone, RECOVERY_ZONE_COLOR } from "@/lib/recovery-zones";
 
 type GaugeColorMode = "sleep" | "recovery" | "strain";
 
@@ -12,12 +13,6 @@ interface CircularGaugeProps {
   size?: number;
 }
 
-const RECOVERY_ZONES = [
-  { max: 33, color: "var(--metric-recovery-low)" },
-  { max: 66, color: "var(--metric-recovery-mid)" },
-  { max: 100, color: "var(--metric-recovery-high)" },
-];
-
 const DEFAULT_MAX: Record<GaugeColorMode, number> = {
   sleep: 100,
   recovery: 100,
@@ -27,8 +22,7 @@ const DEFAULT_MAX: Record<GaugeColorMode, number> = {
 function resolveColor(colorMode: GaugeColorMode, value: number): string {
   if (colorMode === "sleep") return "var(--metric-sleep)";
   if (colorMode === "strain") return "var(--metric-strain)";
-  const zone = RECOVERY_ZONES.find((z) => value <= z.max) ?? RECOVERY_ZONES[RECOVERY_ZONES.length - 1];
-  return zone.color;
+  return RECOVERY_ZONE_COLOR[recoveryZone(value)];
 }
 
 export function CircularGauge({

@@ -54,9 +54,37 @@ export function dayRange(key: string): { start: string; end: string } {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+/** Rolling `days`-day ISO range ending at (and including) the given calendar day. */
+export function rangeSpan(endKey: string, days: number): { start: string; end: string } {
+  const start = parseDateKey(endKey);
+  start.setDate(start.getDate() - (days - 1));
+  const end = parseDateKey(endKey);
+  end.setDate(end.getDate() + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/** Date keys for the `days` calendar days ending at (and including) the given day, oldest first. */
+export function dateKeysInRange(endKey: string, days: number): string[] {
+  return Array.from({ length: days }, (_, i) => addDays(endKey, i - (days - 1)));
+}
+
+export function formatShortDate(key: string): string {
+  const date = parseDateKey(key);
+  return `${MONTHS[date.getMonth()]} ${date.getDate()}`;
+}
+
 export function formatDuration(milli: number): string {
   const totalMinutes = Math.round(milli / 60_000);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${hours}:${String(minutes).padStart(2, "0")}`;
+}
+
+/** "2h 15m" / "45m" — for durations expressed in hours (as opposed to formatDuration's H:MM). */
+export function formatHours(hours: number): string {
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m}m`;
+  return `${h}h ${m}m`;
 }

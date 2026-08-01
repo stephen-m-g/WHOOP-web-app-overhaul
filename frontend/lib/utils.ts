@@ -13,4 +13,4 @@ export function cn(...inputs: ClassValue[]) {
  * light, so the effect still lands even where the background behind a card is calm.
  */
 export const GLASS_CARD =
-  "bg-card/55 backdrop-blur-md ring-2 ring-white/15 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15),inset_0_-1px_0_0_rgba(0,0,0,0.25)]"
+  "bg-card/85 backdrop-blur-md ring-2 ring-white/15 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15),inset_0_-1px_0_0_rgba(0,0,0,0.25)]"
