@@ -154,3 +154,12 @@ class JumpDetailResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class UploadUrlRequest(BaseModel):
+    content_type: str = Field(..., description="MIME type of the video to upload, e.g. 'video/mp4'")
+
+
+class UploadUrlResponse(BaseModel):
+    upload_url: str = Field(..., description="Short-lived signed URL to PUT the video to directly")
+    object_path: str = Field(..., description="Pass this back as video_gcs_path to POST /analyze-jump")

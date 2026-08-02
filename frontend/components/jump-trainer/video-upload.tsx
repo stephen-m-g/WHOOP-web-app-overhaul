@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import type { JumpAnalysisResult, JumpType } from "@/lib/api";
+import { getUploadUrl, type JumpAnalysisResult, type JumpType } from "@/lib/api";
 import { config } from "@/lib/config";
 import { saveJumpResult } from "@/lib/jump-result-store";
 import { cn, GLASS_CARD } from "@/lib/utils";
@@ -18,17 +18,16 @@ const ACCENT_BUTTON =
   "cursor-pointer rounded-full bg-jump-trainer-accent font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
+ * Videos go straight to Cloud Storage via a signed URL (bypassing Cloud
+ * Run's hard 32MB request body limit) rather than through the backend.
  * fetch() has no upload-progress event, so real byte-level progress requires
  * XMLHttpRequest instead. Wrapped in a promise to keep the call site async/await.
  */
-function uploadWithProgress(
-  url: string,
-  formData: FormData,
-  onProgress: (percent: number) => void,
-): Promise<{ status: number; data: unknown }> {
+function putFileWithProgress(url: string, file: File, contentType: string, onProgress: (percent: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", contentType);
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
@@ -37,19 +36,16 @@ function uploadWithProgress(
     };
 
     xhr.onload = () => {
-      let data: unknown = null;
-      try {
-        data = JSON.parse(xhr.responseText);
-      } catch {
-        reject(new Error("Server returned an invalid response."));
-        return;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload to storage failed (${xhr.status}).`));
       }
-      resolve({ status: xhr.status, data });
     };
 
     xhr.onerror = () => reject(new Error("Network error during upload."));
 
-    xhr.send(formData);
+    xhr.send(file);
   });
 }
 
@@ -90,28 +86,31 @@ export function VideoUpload({ bodyHeightCm, userId }: VideoUploadProps) {
       return;
     }
 
-    const formData = new FormData();
-    formData.append("video", file as File);
-    formData.append("user_height_cm", String(bodyHeightCm));
-    formData.append("jump_type", jumpType);
-    if (userId) formData.append("user_id", userId);
+    const videoFile = file as File;
+    const contentType = videoFile.type || (/\.mov$/i.test(videoFile.name) ? "video/quicktime" : "video/mp4");
 
     setIsAnalyzing(true);
     setUploadPercent(0);
     try {
-      // Uploaded directly to the backend (bypassing any Vercel serverless
-      // function) since Vercel caps serverless function request bodies at
-      // 4.5MB — far below the video sizes this needs to accept.
-      const { status, data } = await uploadWithProgress(
-        `${config.backendUrl}/analyze-jump`,
-        formData,
-        setUploadPercent,
-      );
-      if (status < 200 || status >= 300) {
-        const errorData = data as { detail?: string };
-        throw new Error(errorData.detail ?? "Analysis failed.");
+      const { uploadUrl, objectPath } = await getUploadUrl(contentType);
+      await putFileWithProgress(uploadUrl, videoFile, contentType, setUploadPercent);
+      setUploadPercent(100);
+
+      const formData = new FormData();
+      formData.append("video_gcs_path", objectPath);
+      formData.append("user_height_cm", String(bodyHeightCm));
+      formData.append("jump_type", jumpType);
+      if (userId) formData.append("user_id", userId);
+
+      const response = await fetch(`${config.backendUrl}/analyze-jump`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(body.detail ?? "Analysis failed.");
       }
-      const result = data as JumpAnalysisResult;
+      const result: JumpAnalysisResult = await response.json();
       await saveJumpResult({ jumpType, result });
       router.push("/jump-trainer/results");
     } catch (err) {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -14,6 +15,8 @@ from app.models.schemas import (
     JumpHistoryResponse,
     JumpRecordSummary,
     JumpType,
+    UploadUrlRequest,
+    UploadUrlResponse,
 )
 from app.services import pose_analyzer, storage, video_processor
 from app.services.video_processor import VideoValidationError
@@ -22,6 +25,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_CONTENT_TYPE_EXTENSIONS = {
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+}
+
+
+@router.post("/upload-url", response_model=UploadUrlResponse)
+async def create_upload_url(
+    body: UploadUrlRequest,
+    settings: Settings = Depends(get_settings),
+) -> UploadUrlResponse:
+    """Mints a signed URL the browser can PUT a video directly to in Cloud
+    Storage. Used instead of a plain multipart upload to /analyze-jump in
+    production, since Cloud Run enforces a hard 32MB request body limit that
+    an app-level setting can't raise."""
+    if not storage.is_enabled(settings):
+        raise HTTPException(
+            status_code=503,
+            detail="Direct video upload isn't configured on this deployment "
+            "(GCP_PROJECT_ID/STORAGE_BUCKET_NAME unset).",
+        )
+    ext = _CONTENT_TYPE_EXTENSIONS.get(body.content_type.lower())
+    if ext is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content type '{body.content_type}'. "
+            f"Allowed: {', '.join(_CONTENT_TYPE_EXTENSIONS)}",
+        )
+    object_path = f"{storage.TEMP_UPLOAD_PREFIX}/{uuid.uuid4().hex}{ext}"
+    upload_url = storage.create_signed_upload_url(object_path, body.content_type, settings)
+    return UploadUrlResponse(upload_url=upload_url, object_path=object_path)
+
 
 @router.post(
     "/analyze-jump",
@@ -29,7 +64,14 @@ router = APIRouter()
     responses={400: {"description": "Invalid input"}, 500: {"description": "Processing error"}},
 )
 async def analyze_jump(
-    video: UploadFile = File(..., description="MP4 or MOV video of a vertical or broad jump"),
+    video: UploadFile | None = File(
+        None, description="MP4 or MOV video, for local dev direct upload. Omit if using video_gcs_path."
+    ),
+    video_gcs_path: str | None = Form(
+        None,
+        description="Object path returned by POST /upload-url, for videos uploaded directly to Cloud Storage. "
+        "Used in production instead of `video` since Cloud Run caps request bodies at 32MB.",
+    ),
     user_height_cm: float = Form(..., gt=0, description="User's height in centimeters, used for calibration"),
     jump_type: JumpType = Form(
         JumpType.VERTICAL,
@@ -45,11 +87,22 @@ async def analyze_jump(
 ) -> JumpAnalysisResponse:
     start = time.perf_counter()
 
-    ext = _validate_and_get_extension(video.filename)
-    data = await video.read()
-    _validate_size(data, settings.max_upload_bytes)
+    if video is not None:
+        ext = _validate_and_get_extension(video.filename)
+        data = await video.read()
+        _validate_size(data, settings.max_upload_bytes)
+        saved_path = video_processor.save_upload(data, ext, settings.tmp_upload_dir)
+    elif video_gcs_path:
+        _validate_and_get_extension(video_gcs_path)
+        try:
+            saved_path = storage.download_temp_video(video_gcs_path, settings.tmp_upload_dir, settings)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=400, detail="Uploaded video not found or expired. Please try again."
+            ) from exc
+    else:
+        raise HTTPException(status_code=400, detail="Provide either a video file or video_gcs_path.")
 
-    saved_path = video_processor.save_upload(data, ext, settings.tmp_upload_dir)
     try:
         info = video_processor.probe_video(saved_path)
         frames = video_processor.extract_frames(info)
@@ -73,6 +126,8 @@ async def analyze_jump(
         raise HTTPException(status_code=500, detail="Failed to process video. Please try again.") from exc
     finally:
         video_processor.cleanup(saved_path)
+        if video_gcs_path:
+            storage.delete_temp_object(video_gcs_path, settings)
 
     processing_time_ms = int((time.perf_counter() - start) * 1000)
 

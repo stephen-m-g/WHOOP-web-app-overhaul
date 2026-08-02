@@ -5,6 +5,15 @@ are deleted right after processing regardless of this being enabled).
 Feature-flagged via Settings and a no-op whenever GCP isn't configured, so
 local development and the existing test suite work with zero GCP setup.
 
+Also provides signed-URL video uploads (create_signed_upload_url /
+download_temp_video / delete_temp_object) — used by /upload-url and
+/analyze-jump so the browser can PUT large videos straight to Cloud Storage,
+bypassing Cloud Run's hard 32MB request body limit. Unlike the result
+persistence above, this is NOT optional in production: without it, videos
+over ~32MB can never reach the backend at all. It's only skipped locally,
+where the direct multipart upload on /analyze-jump is used instead since
+Cloud Run's limit doesn't apply to a local uvicorn server.
+
 Setup (once a GCP project exists):
 1. Enable the Firestore and Cloud Storage APIs on the project.
 2. Create a Firestore database (Native mode) and a Cloud Storage bucket.
@@ -14,7 +23,11 @@ Setup (once a GCP project exists):
    file needed there, Application Default Credentials pick up the attached
    service account automatically. For local testing against a real
    project, run `gcloud auth application-default login` first.
-5. `pip install google-cloud-firestore google-cloud-storage` (not in
+5. Also grant that same service account `roles/iam.serviceAccountTokenCreator`
+   on ITSELF (a self-referential binding) — signed URLs are minted via the
+   IAM signBlob API since Cloud Run's attached service account has no
+   private key file, and signBlob needs that permission.
+6. `pip install google-cloud-firestore google-cloud-storage` (not in
    requirements.txt by default — see requirements.txt comment — since most
    local dev/testing never needs them).
 """
@@ -22,17 +35,90 @@ from __future__ import annotations
 
 import base64
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 
 from app.config import Settings, get_settings
 from app.models.schemas import JumpAnalysisResponse, JumpType
 
 logger = logging.getLogger(__name__)
 
+TEMP_UPLOAD_PREFIX = "tmp-uploads"
+
 
 def is_enabled(settings: Settings | None = None) -> bool:
     settings = settings or get_settings()
     return bool(settings.gcp_project_id and settings.storage_bucket_name)
+
+
+def create_signed_upload_url(object_path: str, content_type: str, settings: Settings | None = None) -> str:
+    """Returns a short-lived (15 min) signed URL the browser can PUT a video
+    directly to — the file never passes through this app for this step, so
+    Cloud Run's 32MB request body limit never applies to it."""
+    settings = settings or get_settings()
+    import google.auth
+    from google.auth.transport import requests as google_auth_requests
+    from google.cloud import storage as gcs_storage
+
+    client = gcs_storage.Client(project=settings.gcp_project_id)
+    blob = client.bucket(settings.storage_bucket_name).blob(object_path)
+
+    credentials, _ = google.auth.default()
+    credentials.refresh(google_auth_requests.Request())
+
+    if not hasattr(credentials, "service_account_email"):
+        # google.auth.default() returns compute_engine.Credentials on Cloud
+        # Run/GCE (has this attribute), but user OAuth credentials from
+        # `gcloud auth application-default login` — the local-dev path this
+        # module's docstring recommends — don't. Signing without a private
+        # key needs a concrete service account to impersonate via IAM
+        # signBlob, which user credentials don't carry.
+        raise RuntimeError(
+            "Signed upload URLs require Cloud Run's attached service account credentials "
+            "(or another credential type exposing service_account_email); user ADC "
+            "credentials can't sign URLs without impersonating a service account."
+        )
+
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=15),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=credentials.service_account_email,
+        access_token=credentials.token,
+    )
+
+
+def download_temp_video(object_path: str, upload_dir: str, settings: Settings | None = None) -> str:
+    """Downloads a browser-uploaded temp video to a local file for
+    processing, returning the local path. Raises FileNotFoundError if the
+    object doesn't exist (e.g. the signed URL expired unused)."""
+    settings = settings or get_settings()
+    from google.cloud import storage as gcs_storage
+
+    client = gcs_storage.Client(project=settings.gcp_project_id)
+    blob = client.bucket(settings.storage_bucket_name).blob(object_path)
+    if not blob.exists():
+        raise FileNotFoundError(f"Upload not found: {object_path}")
+
+    os.makedirs(upload_dir, exist_ok=True)
+    local_path = os.path.join(upload_dir, os.path.basename(object_path))
+    blob.download_to_filename(local_path)
+    return local_path
+
+
+def delete_temp_object(object_path: str, settings: Settings | None = None) -> None:
+    """Best-effort cleanup of a temp upload object after processing — never
+    raises, matching this module's save_jump_record/-list/-get philosophy
+    (a cleanup failure must never surface as a request error)."""
+    settings = settings or get_settings()
+    try:
+        from google.cloud import storage as gcs_storage
+
+        client = gcs_storage.Client(project=settings.gcp_project_id)
+        client.bucket(settings.storage_bucket_name).blob(object_path).delete()
+    except Exception:
+        logger.warning("Failed to delete temp upload object %s", object_path, exc_info=True)
 
 
 def save_jump_record(

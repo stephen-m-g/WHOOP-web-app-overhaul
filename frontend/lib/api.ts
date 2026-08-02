@@ -67,6 +67,32 @@ export class BackendApiError extends Error {
   }
 }
 
+export interface UploadUrl {
+  uploadUrl: string;
+  objectPath: string;
+}
+
+/**
+ * Mints a signed URL for uploading a video straight to Cloud Storage,
+ * bypassing Cloud Run's 32MB request body limit — the video is PUT directly
+ * to this URL, never through the backend's own request handling.
+ */
+export async function getUploadUrl(contentType: string): Promise<UploadUrl> {
+  const response = await fetch(`${config.backendUrl}/upload-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content_type: contentType }),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new BackendApiError(body.detail ?? "Failed to prepare upload", response.status);
+  }
+
+  const data: { upload_url: string; object_path: string } = await response.json();
+  return { uploadUrl: data.upload_url, objectPath: data.object_path };
+}
+
 export async function getJumpHistory(userId: string, limit = 20): Promise<JumpRecordSummary[]> {
   const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
   const response = await fetch(`${config.backendUrl}/jumps?${params.toString()}`, {
