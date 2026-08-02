@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "info"
 
+    # Optional Firestore/Cloud Storage persistence (app/services/storage.py).
+    # Left unset, jump results stay ephemeral (analyzed and returned, nothing
+    # saved) — exactly today's behavior. Both must be set to enable it.
+    gcp_project_id: str = ""
+    storage_bucket_name: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

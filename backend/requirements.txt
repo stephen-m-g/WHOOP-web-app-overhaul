@@ -9,3 +9,19 @@ pydantic-settings==2.6.1
 # into the same `cv2` namespace and will conflict.
 mediapipe==1.0.0
 numpy==2.1.3
+# CPU-only local LLM inference for app/services/coaching_llm.py (B2 pipeline:
+# rule-based facts -> small open-weight model -> natural coaching prose).
+# Gracefully unused if the model file at COACHING_MODEL_PATH isn't present —
+# see coaching_llm.py and scripts/download_coaching_model.py.
+#
+# No prebuilt wheel for every platform/Python combo is on PyPI itself, which
+# makes `pip install -r requirements.txt` alone fall back to a from-source
+# CMake build that can fail (hit this on Windows + Python 3.13, a CMake/
+# OpenMP incompatibility). Install this one line separately using the
+# project's prebuilt CPU wheel index instead:
+#   pip install llama-cpp-python==0.3.34 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python==0.3.34
+
+# Optional, NOT installed by default — only needed once app/services/storage.py
+# is actually enabled (GCP_PROJECT_ID + STORAGE_BUCKET_NAME set):
+#   pip install google-cloud-firestore google-cloud-storage

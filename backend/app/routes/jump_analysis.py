@@ -1,5 +1,5 @@
 """POST /analyze-jump — accepts a jump video + user height, returns jump
-metrics, keyframes, and coaching feedback."""
+metrics, per-keyframe analysis, and coaching feedback."""
 from __future__ import annotations
 
 import logging
@@ -8,8 +8,14 @@ import time
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.config import Settings, get_settings
-from app.models.schemas import JumpAnalysisResponse, JumpType
-from app.services import pose_analyzer, video_processor
+from app.models.schemas import (
+    JumpAnalysisResponse,
+    JumpDetailResponse,
+    JumpHistoryResponse,
+    JumpRecordSummary,
+    JumpType,
+)
+from app.services import pose_analyzer, storage, video_processor
 from app.services.video_processor import VideoValidationError
 
 logger = logging.getLogger(__name__)
@@ -29,7 +35,12 @@ async def analyze_jump(
         JumpType.VERTICAL,
         description="'vertical' (default) or 'broad'. Broad jump distance assumes a side-on camera angle.",
     ),
-    include_debug: bool = Form(False, description="If true, include intermediate calibration values and skeleton-overlay images"),
+    user_id: str | None = Form(
+        None, description="Whoop user id, used only to scope saved jump history. Omit to skip persistence."
+    ),
+    include_debug: bool = Form(
+        False, description="If true, include intermediate calibration/comparison values (not needed for normal use)"
+    ),
     settings: Settings = Depends(get_settings),
 ) -> JumpAnalysisResponse:
     start = time.perf_counter()
@@ -50,7 +61,9 @@ async def analyze_jump(
             user_height_cm=user_height_cm,
             frame_width_px=info.width,
             jump_type=jump_type,
-            frames=frames if include_debug else None,
+            # Always pass frames now — every keyframe gets an annotated still
+            # as a core part of the response, not just an opt-in debug extra.
+            frames=frames,
             include_debug=include_debug,
         )
     except VideoValidationError as exc:
@@ -63,15 +76,54 @@ async def analyze_jump(
 
     processing_time_ms = int((time.perf_counter() - start) * 1000)
 
-    return JumpAnalysisResponse(
+    response = JumpAnalysisResponse(
         jump_height_cm=metrics.jump_height_cm,
         jump_distance_cm=metrics.jump_distance_cm,
-        keyframes=metrics.keyframes,
+        keyframe_analyses=metrics.keyframe_analyses,
         coaching_feedback=metrics.coaching_feedback,
         analysis_confidence=metrics.analysis_confidence,
         processing_time_ms=processing_time_ms,
+        camera_warnings=metrics.camera_warnings,
         debug=metrics.debug,
     )
+
+    # Best-effort; storage.save_jump_record() never raises, and is a no-op
+    # unless both GCP settings and a user_id are present.
+    storage.save_jump_record(user_id, jump_type, response, settings)
+
+    return response
+
+
+@router.get("/jumps", response_model=JumpHistoryResponse)
+async def get_jump_history(
+    user_id: str,
+    limit: int = 20,
+    settings: Settings = Depends(get_settings),
+) -> JumpHistoryResponse:
+    """Returns a user's most recent saved jump records (summary fields only).
+    Empty if storage isn't configured, matching how persistence silently
+    no-ops on save when it's unavailable."""
+    records = storage.list_jump_records(user_id, limit, settings)
+    return JumpHistoryResponse(jumps=[JumpRecordSummary(**record) for record in records])
+
+
+@router.get(
+    "/jumps/{record_id}",
+    response_model=JumpDetailResponse,
+    responses={404: {"description": "Jump record not found"}},
+)
+async def get_jump_detail(
+    record_id: str,
+    user_id: str,
+    settings: Settings = Depends(get_settings),
+) -> JumpDetailResponse:
+    """Returns one full saved jump — every keyframe image re-fetched from
+    Cloud Storage, matching what the analysis endpoint returned right after
+    processing."""
+    record = storage.get_jump_record(user_id, record_id, settings)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Jump record not found.")
+    return JumpDetailResponse(**record)
 
 
 def _validate_and_get_extension(filename: str | None) -> str:

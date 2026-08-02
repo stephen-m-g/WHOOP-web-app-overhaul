@@ -7,11 +7,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import type { JumpAnalysisResult, JumpType } from "@/lib/api";
+import { saveJumpResult } from "@/lib/jump-result-store";
 import { cn, GLASS_CARD } from "@/lib/utils";
 
 const ALLOWED_TYPES = ["video/mp4", "video/quicktime"];
 const MAX_SIZE_MB = 500;
-const RESULT_STORAGE_KEY = "jumpTrainerResult";
 
 const ACCENT_BUTTON =
   "cursor-pointer rounded-full bg-jump-trainer-accent font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
@@ -54,9 +54,10 @@ function uploadWithProgress(
 
 interface VideoUploadProps {
   bodyHeightCm: number | null;
+  userId: string | null;
 }
 
-export function VideoUpload({ bodyHeightCm }: VideoUploadProps) {
+export function VideoUpload({ bodyHeightCm, userId }: VideoUploadProps) {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [jumpType, setJumpType] = useState<JumpType>("vertical");
@@ -92,6 +93,7 @@ export function VideoUpload({ bodyHeightCm }: VideoUploadProps) {
     formData.append("video", file as File);
     formData.append("userHeightCm", String(bodyHeightCm));
     formData.append("jumpType", jumpType);
+    if (userId) formData.append("userId", userId);
 
     setIsAnalyzing(true);
     setUploadPercent(0);
@@ -101,10 +103,8 @@ export function VideoUpload({ bodyHeightCm }: VideoUploadProps) {
         const errorData = data as { error?: string };
         throw new Error(errorData.error ?? "Analysis failed.");
       }
-      sessionStorage.setItem(
-        RESULT_STORAGE_KEY,
-        JSON.stringify({ jumpType, result: data as JumpAnalysisResult }),
-      );
+      const result = data as JumpAnalysisResult;
+      await saveJumpResult({ jumpType, result });
       router.push("/jump-trainer/results");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");

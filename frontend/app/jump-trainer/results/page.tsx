@@ -5,32 +5,35 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { ResultsDisplay } from "@/components/jump-trainer/results-display";
+import { readJumpResult } from "@/lib/jump-result-store";
 import type { JumpAnalysisResult, JumpType } from "@/lib/api";
-
-const RESULT_STORAGE_KEY = "jumpTrainerResult";
 
 interface StoredResult {
   jumpType: JumpType;
   result: JumpAnalysisResult;
 }
 
-function readStoredResult(): StoredResult | null {
-  if (typeof window === "undefined") return null;
-  const raw = sessionStorage.getItem(RESULT_STORAGE_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as StoredResult;
-  } catch {
-    return null;
-  }
-}
-
 export default function JumpTrainerResultsPage() {
   const router = useRouter();
-  const [stored] = useState<StoredResult | null>(readStoredResult);
+  // undefined = still loading from IndexedDB, null = nothing found.
+  const [stored, setStored] = useState<StoredResult | null | undefined>(undefined);
 
   useEffect(() => {
-    if (!stored) {
+    let cancelled = false;
+    readJumpResult<StoredResult>()
+      .then((value) => {
+        if (!cancelled) setStored(value);
+      })
+      .catch(() => {
+        if (!cancelled) setStored(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (stored === null) {
       router.replace("/jump-trainer");
     }
   }, [stored, router]);

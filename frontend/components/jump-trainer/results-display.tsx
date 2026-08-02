@@ -1,9 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
 import { KeyFrameAnalysis } from "@/components/jump-trainer/key-frame-analysis";
 import type { JumpAnalysisResult, JumpType } from "@/lib/api";
+import { formatMeasurement, type MeasurementUnit } from "@/lib/jump-stats";
 import { cn, GLASS_CARD } from "@/lib/utils";
 
 interface ResultsDisplayProps {
@@ -11,23 +14,26 @@ interface ResultsDisplayProps {
   result: JumpAnalysisResult;
 }
 
-type Unit = "metric" | "imperial";
-
-const CM_PER_INCH = 2.54;
-
-function formatMeasurement(cm: number, unit: Unit): string {
-  if (unit === "metric") return `${cm} cm`;
-  return `${(cm / CM_PER_INCH).toFixed(1)} in`;
-}
-
 export function ResultsDisplay({ jumpType, result }: ResultsDisplayProps) {
-  const [unit, setUnit] = useState<Unit>("metric");
+  const [unit, setUnit] = useState<MeasurementUnit>("metric");
   const confidencePct = Math.round(result.analysis_confidence * 100);
   const measurementCm = jumpType === "vertical" ? result.jump_height_cm : result.jump_distance_cm;
   const measurementLabel = jumpType === "vertical" ? "estimated height:" : "estimated distance:";
 
   return (
     <div className="flex flex-col gap-4">
+      {result.camera_warnings.length > 0 && (
+        <div className="animate-intro-fade flex flex-col gap-2">
+          {result.camera_warnings.map((warning) => (
+            <Alert key={warning.code}>
+              <TriangleAlert className="text-amber-500" />
+              <AlertTitle>Camera setup may have affected this result</AlertTitle>
+              <AlertDescription>{warning.message}</AlertDescription>
+            </Alert>
+          ))}
+        </div>
+      )}
+
       <Card className={cn("animate-intro-fade [animation-delay:150ms]", GLASS_CARD)}>
         <CardContent>
           <div className="mb-4 flex items-center justify-between gap-4">
@@ -74,7 +80,7 @@ export function ResultsDisplay({ jumpType, result }: ResultsDisplayProps) {
 
       <Card className={cn("animate-intro-fade [animation-delay:300ms]", GLASS_CARD)}>
         <CardContent>
-          <KeyFrameAnalysis />
+          <KeyFrameAnalysis keyframeAnalyses={result.keyframe_analyses} />
         </CardContent>
       </Card>
     </div>
