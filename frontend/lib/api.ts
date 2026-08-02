@@ -67,31 +67,6 @@ export class BackendApiError extends Error {
   }
 }
 
-export async function analyzeJump(
-  video: File,
-  userHeightCm: number,
-  jumpType: JumpType = "vertical",
-  userId?: string | null,
-): Promise<JumpAnalysisResult> {
-  const formData = new FormData();
-  formData.append("video", video);
-  formData.append("user_height_cm", String(userHeightCm));
-  formData.append("jump_type", jumpType);
-  if (userId) formData.append("user_id", userId);
-
-  const response = await fetch(`${config.backendUrl}/analyze-jump`, {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new BackendApiError(body.detail ?? "Jump analysis failed", response.status);
-  }
-
-  return response.json();
-}
-
 export async function getJumpHistory(userId: string, limit = 20): Promise<JumpRecordSummary[]> {
   const params = new URLSearchParams({ user_id: userId, limit: String(limit) });
   const response = await fetch(`${config.backendUrl}/jumps?${params.toString()}`, {

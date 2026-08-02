@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import type { JumpAnalysisResult, JumpType } from "@/lib/api";
+import { config } from "@/lib/config";
 import { saveJumpResult } from "@/lib/jump-result-store";
 import { cn, GLASS_CARD } from "@/lib/utils";
 
@@ -91,17 +92,24 @@ export function VideoUpload({ bodyHeightCm, userId }: VideoUploadProps) {
 
     const formData = new FormData();
     formData.append("video", file as File);
-    formData.append("userHeightCm", String(bodyHeightCm));
-    formData.append("jumpType", jumpType);
-    if (userId) formData.append("userId", userId);
+    formData.append("user_height_cm", String(bodyHeightCm));
+    formData.append("jump_type", jumpType);
+    if (userId) formData.append("user_id", userId);
 
     setIsAnalyzing(true);
     setUploadPercent(0);
     try {
-      const { status, data } = await uploadWithProgress("/api/upload-jump", formData, setUploadPercent);
+      // Uploaded directly to the backend (bypassing any Vercel serverless
+      // function) since Vercel caps serverless function request bodies at
+      // 4.5MB — far below the video sizes this needs to accept.
+      const { status, data } = await uploadWithProgress(
+        `${config.backendUrl}/analyze-jump`,
+        formData,
+        setUploadPercent,
+      );
       if (status < 200 || status >= 300) {
-        const errorData = data as { error?: string };
-        throw new Error(errorData.error ?? "Analysis failed.");
+        const errorData = data as { detail?: string };
+        throw new Error(errorData.detail ?? "Analysis failed.");
       }
       const result = data as JumpAnalysisResult;
       await saveJumpResult({ jumpType, result });
