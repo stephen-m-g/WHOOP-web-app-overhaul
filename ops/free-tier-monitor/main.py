@@ -12,11 +12,14 @@ usage is summed from the 1st of the current month (UTC) to now.
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
 import functions_framework
 from google.cloud import monitoring_v3
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ID = os.environ["PROJECT_ID"]
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "whoop-backend")
@@ -80,10 +83,12 @@ def check_free_tier_usage(request):
 
     _publish_percent(client, worst_pct)
 
-    return {
+    result = {
         "cpu_vcpu_seconds": round(cpu_seconds, 1),
         "cpu_percent_of_free_tier": round(cpu_pct, 1),
         "memory_gib_seconds": round(memory_gib_seconds, 1),
         "memory_percent_of_free_tier": round(memory_pct, 1),
         "worst_percent": round(worst_pct, 1),
     }
+    logger.info("Free tier usage check: %s", result)
+    return result
