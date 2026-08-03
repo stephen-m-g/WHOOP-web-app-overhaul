@@ -1,0 +1,16 @@
+displayName: "Cloud Run free tier - 90% warning"
+combiner: OR
+conditions:
+  - displayName: "free_tier_usage_percent > 90"
+    conditionThreshold:
+      filter: 'metric.type="custom.googleapis.com/cloud_run/free_tier_usage_percent" AND resource.type="global"'
+      comparison: COMPARISON_GT
+      thresholdValue: 90
+      duration: 0s
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_MAX
+notificationChannels:
+  - "NOTIFICATION_CHANNEL_PLACEHOLDER"
+alertStrategy:
+  autoClose: 604800s
